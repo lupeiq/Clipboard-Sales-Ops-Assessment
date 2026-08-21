@@ -12,32 +12,29 @@ def propose_reparent(account, correct_parent_id):
     has_ar = (account.get("outstanding_ar") or 0) > 0
 
     if has_revenue and has_ar:
-        # protected: leave old account alone, create a new one, link via chow_current_account
-        return [
-            {
-                "action": "create_account",
-                "account_id": None,
-                "payload": {
-                    "name": account["name"],
-                    "parent_id": correct_parent_id,
-                    "billing_street": account.get("billing_street"),
-                    "billing_city": account.get("billing_city"),
-                    "billing_state": account.get("billing_state"),
-                    "billing_zip": account.get("billing_zip"),
-                    "care_type": account.get("care_type"),
-                    "status": "Active",
-                },
-                "evidence": {
-                    "reason": "CHOW: old account has revenue history and outstanding AR, "
-                              "must be preserved. Creating new account under correct parent.",
-                    "old_account_id": account["account_id"],
-                    "lifetime_revenue": account.get("lifetime_revenue"),
-                    "outstanding_ar": account.get("outstanding_ar"),
-                },
-                # marker so the review app knows to chain the next step after this executes
-                "chow_link_source": account["account_id"],
+        return [{
+            "action": "create_account",
+            "account_id": None,
+            "payload": {
+                "name": account["name"],
+                "parent_id": correct_parent_id,
+                "billing_street": account.get("billing_street"),
+                "billing_city": account.get("billing_city"),
+                "billing_state": account.get("billing_state"),
+                "billing_zip": account.get("billing_zip"),
+                "care_type": account.get("care_type"),
+                "status": "Active",
             },
-        ]
+            "evidence": {
+                "reason": "CHOW: old account has revenue history and outstanding AR, "
+                          "must be preserved. Creating new account under correct parent; "
+                          "chow_current_account will be set on the old account once this is approved.",
+                "old_account_id": account["account_id"],
+                "lifetime_revenue": account.get("lifetime_revenue"),
+                "outstanding_ar": account.get("outstanding_ar"),
+            },
+            "chow_link_source": account["account_id"],
+        }]
     else:
         return [{
             "action": "update_field",
@@ -50,6 +47,67 @@ def propose_reparent(account, correct_parent_id):
                 "outstanding_ar": account.get("outstanding_ar"),
             },
         }]
+
+
+def propose_duplicate_resolution(duplicate_group, match_results):
+    """Given a group of CRM duplicates, decide survivor vs loser and propose accordingly."""
+    matched_ids = {
+        r["matched_account"]["account_id"]
+        for r in match_results["results"]
+        if r.get("matched_account")
+    }
+
+    survivors = [a for a in duplicate_group if a["account_id"] in matched_ids]
+    losers = [a for a in duplicate_group if a["account_id"] not in matched_ids]
+
+    if len(survivors) != 1 or not losers:
+        # ambiguous — more than one or zero records matched the live site;
+        # don't guess, flag all for manual review instead
+        return [{
+            "action": "update_field",
+            "account_id": a["account_id"],
+            "payload": {"field": "status", "new_value": "Needs Review",
+                        "note": "Possible duplicate account — could not automatically determine "
+                                "which record should survive. Manual review needed."},
+            "evidence": {"reason": "Duplicate group detected but survivor is ambiguous.",
+                         "group_ids": [x["account_id"] for x in duplicate_group]},
+        } for a in duplicate_group]
+
+    survivor = survivors[0]
+    proposals = []
+    for loser in losers:
+        has_revenue = (loser.get("lifetime_revenue") or 0) > 0
+        has_ar = (loser.get("outstanding_ar") or 0) > 0
+
+        if has_revenue and has_ar:
+            # protected — even as a "loser," can't just deactivate it if it has billing history.
+            # Flag for manual review rather than guessing.
+            proposals.append({
+                "action": "update_field",
+                "account_id": loser["account_id"],
+                "payload": {"field": "status", "new_value": "Needs Review",
+                            "note": f"Likely duplicate of {survivor['account_id']} but has revenue "
+                                    f"history and outstanding AR — do not mark Inactive without "
+                                    f"billing team review."},
+                "evidence": {"reason": "Duplicate with billing history — cannot auto-resolve.",
+                             "survivor_id": survivor["account_id"]},
+            })
+        else:
+            proposals.append({
+                "action": "mark_duplicate",
+                "account_id": loser["account_id"],
+                "payload": {
+                    "duplicate_of_account": survivor["account_id"],
+                    "status": "Inactive",
+                },
+                "evidence": {
+                    "reason": "Duplicate CRM record — matched location on live website corresponds "
+                              "to the survivor account. This record has no revenue/AR history.",
+                    "survivor_id": survivor["account_id"],
+                    "survivor_name": survivor["name"],
+                },
+            })
+    return proposals
 
 
 def generate_all(match_results):
@@ -80,16 +138,14 @@ def generate_all(match_results):
             if not r["evidence"].get("correct_parent"):
                 proposals.extend(propose_reparent(acct, BELLHAVEN_PARENT_ID))
             else:
-                # name drifted from what the website shows, parent is fine
                 proposals.append({
                     "action": "update_field",
                     "account_id": acct["account_id"],
                     "payload": {"field": "name", "new_value": loc["name"]},
                     "evidence": {"reason": "Name on file differs from current website listing.",
                                  "old_name": acct["name"], "new_name": loc["name"],
-                                 "name_score": r["evidence"]["name_score"]},
+                                 "name_score": r["evidence"].get("name_score")},
                 })
-        # confident_match -> no proposal needed
 
     for orphan in match_results["orphans"]:
         proposals.append({
@@ -101,6 +157,9 @@ def generate_all(match_results):
             "evidence": {"reason": "CRM account under Bellhaven parent not found on current website.",
                          "account_name": orphan["name"], "city": orphan.get("billing_city")},
         })
+
+    for group in match_results.get("duplicates", []):
+        proposals.extend(propose_duplicate_resolution(group, match_results))
 
     return proposals
 
