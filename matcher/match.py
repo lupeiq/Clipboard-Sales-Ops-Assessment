@@ -27,7 +27,15 @@ def classify(location, crm_accounts):
             continue
 
         name_score, city_match, state_match = score_pair(location, account)
-        composite = name_score + (30 if city_match else 0) + (10 if state_match else 0)
+
+        # require city match to be a candidate in the first pass —
+        # name-only similarity produces false matches across different towns
+        # (e.g. "Bellhaven of Carlisle" vs "Bellhaven of New Carlisle",
+        # or "Bellhaven of X" vs "Bellhaven of Y" sharing the "Bellhaven of" tokens)
+        if not city_match:
+            continue
+
+        composite = name_score + (10 if state_match else 0)
 
         if composite > best_composite:
             best_composite = composite
@@ -162,6 +170,11 @@ if __name__ == "__main__":
     print(f"\nDuplicate groups found: {len(duplicates)}")
     for group in duplicates:
         print("  ", [(a["account_id"], a["name"], a.get("lifetime_revenue"), a.get("outstanding_ar")) for a in group])
+
+    print(f"\nno_crm_account locations:")
+    for r in results:
+        if r["bucket"] == "no_crm_account":
+            print("  -", r["location"]["name"], "|", r["location"].get("city"), r["location"].get("state"))
 
     with open("data/match_results.json", "w") as f:
         json.dump({"results": results, "orphans": orphans, "duplicates": duplicates}, f, indent=2)
