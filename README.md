@@ -186,8 +186,6 @@ CRM — only this app does, and only on explicit human action.
 
 ## What was approved
 
-## What was approved
-
 19 of 20 proposals were approved; 1 was rejected.
 
 **Approved:**
