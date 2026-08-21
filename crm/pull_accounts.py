@@ -6,6 +6,7 @@ BASE = "https://analyst-assessment-production.up.railway.app/api/v1"
 TOKEN = "bh_tnKJMdeGm1I4br7d6ZSJ_Q"
 HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 
+
 def pull_all_accounts():
     accounts = []
     page = 1
@@ -14,8 +15,7 @@ def pull_all_accounts():
         resp.raise_for_status()
         data = resp.json()
 
-        # ADJUST based on what the real response shape looks like
-        items = data["items"] if isinstance(data, dict) else data
+        items = data["data"] if isinstance(data, dict) else data
         if not items:
             break
         accounts.extend(items)
@@ -26,6 +26,7 @@ def pull_all_accounts():
         page += 1
 
     return accounts
+
 
 if __name__ == "__main__":
     accounts = pull_all_accounts()
