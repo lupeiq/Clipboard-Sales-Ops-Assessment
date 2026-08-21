@@ -63,3 +63,106 @@ def classify(location, crm_accounts):
             "city_match": city_match,
             "state_match": state_match,
             "correct_parent": correct_parent,
+            "current_parent_name": best_account.get("parent_name"),
+        },
+    }
+
+
+def find_orphans(results, crm_accounts):
+    matched_ids = {r["matched_account"]["account_id"] for r in results if r.get("matched_account")}
+    return [
+        a for a in crm_accounts
+        if a.get("parent_id") == BELLHAVEN_PARENT_ID and a["account_id"] not in matched_ids
+    ]
+
+
+def second_pass_by_city_state(results, orphans):
+    """Catch renames the name-similarity pass missed, using city+state as the anchor."""
+    still_unmatched_locations = [
+        r["location"] for r in results if r["bucket"] == "no_crm_account"
+    ]
+
+    rename_matches = []
+    remaining_orphans = []
+    used_location_names = set()
+
+    for orphan in orphans:
+        o_city = (orphan.get("billing_city") or "").strip().lower()
+        o_state = (orphan.get("billing_state") or "").strip().lower()
+
+        candidates = [
+            loc for loc in still_unmatched_locations
+            if (loc.get("city") or "").strip().lower() == o_city
+            and (loc.get("state") or "").strip().lower() == o_state
+            and loc["name"] not in used_location_names
+        ]
+
+        if len(candidates) == 1:
+            matched_loc = candidates[0]
+            used_location_names.add(matched_loc["name"])
+            rename_matches.append({
+                "location": matched_loc,
+                "matched_account": orphan,
+                "bucket": "needs_fix",
+                "evidence": {
+                    "reason": "Matched by city+state only — name changed substantially from CRM record.",
+                    "old_name": orphan["name"],
+                    "new_name": matched_loc["name"],
+                    "correct_parent": True,
+                },
+            })
+        else:
+            remaining_orphans.append(orphan)
+
+    return rename_matches, remaining_orphans
+
+
+def find_duplicates(crm_accounts):
+    """Flag CRM accounts under Bellhaven that share name+city+state with another."""
+    groups = defaultdict(list)
+    for a in crm_accounts:
+        if a.get("parent_id") != BELLHAVEN_PARENT_ID:
+            continue
+        key = (
+            a["name"].strip().lower(),
+            (a.get("billing_city") or "").strip().lower(),
+            (a.get("billing_state") or "").strip().lower(),
+        )
+        groups[key].append(a)
+    return [g for g in groups.values() if len(g) > 1]
+
+
+if __name__ == "__main__":
+    locations = load("data/scraped_locations.json")
+    crm_accounts = load("data/crm_accounts.json")
+
+    results = [classify(loc, crm_accounts) for loc in locations]
+    orphans = find_orphans(results, crm_accounts)
+
+    # second pass: catch renames the fuzzy name match missed
+    rename_matches, orphans = second_pass_by_city_state(results, orphans)
+    results.extend(rename_matches)
+
+    # remove the now-matched locations from the no_crm_account bucket
+    renamed_location_names = {rm["location"]["name"] for rm in rename_matches}
+    results = [
+        r for r in results
+        if not (r["bucket"] == "no_crm_account" and r["location"]["name"] in renamed_location_names)
+    ]
+
+    duplicates = find_duplicates(crm_accounts)
+
+    counts = Counter(r["bucket"] for r in results)
+    print("Bucket counts:", dict(counts))
+
+    print(f"\nOrphans remaining (genuinely not found on site): {len(orphans)}")
+    for o in orphans:
+        print("  -", o["name"], "|", o.get("billing_city"), o.get("billing_state"))
+
+    print(f"\nDuplicate groups found: {len(duplicates)}")
+    for group in duplicates:
+        print("  ", [(a["account_id"], a["name"], a.get("lifetime_revenue"), a.get("outstanding_ar")) for a in group])
+
+    with open("data/match_results.json", "w") as f:
+        json.dump({"results": results, "orphans": orphans, "duplicates": duplicates}, f, indent=2)
+    print("\nSaved to data/match_results.json")
