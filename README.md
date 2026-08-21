@@ -186,12 +186,51 @@ CRM — only this app does, and only on explicit human action.
 
 ## What was approved
 
-*[Fill in after going through the review app: how many of the 20
-proposals you approved vs. rejected, and call out anything you overrode —
-e.g. if you disagreed with a `needs_fix` rename or chose to leave an
-orphan as-is rather than approve the Needs Review flag. This is the part
-that shows the CRM's end state reflects your actual judgment, not just
-the pipeline's.]*
+## What was approved
+
+19 of 20 proposals were approved; 1 was rejected.
+
+**Approved:**
+- 6 renames where the CRM name had drifted from the current website listing
+  (Grove City, Dayton, Ashland — caught by the name-similarity pass; Chesterton,
+  Chagrin Falls, Willow Creek — caught by the city+state fallback pass, since
+  these had changed too much for name similarity alone to catch)
+- 4 direct re-parents into Bellhaven's parent account, none of which carried
+  both revenue and outstanding AR, so no CHOW handling was required
+  (Kettering Care Centre, Bellhaven Crossings of Lima, Cedar Trail of
+  Zanesville, Union Square Senior Living)
+- 3 new account creations for site listings with no CRM counterpart at all
+  (Bellhaven of Batavia, Bellhaven of Carlisle, Amberly Manor in Hudson, OH)
+- 2 CHOW-protected re-parents (Bellhaven of Tiffin, Bellhaven of Marietta) —
+  both accounts carried lifetime revenue and outstanding AR, so per the SOP
+  the old accounts were left untouched and new accounts were created under
+  Bellhaven instead; `chow_current_account` was set on each old account
+  once its corresponding create was approved
+- The duplicate resolution on the Owosso pair — `001QU150PM4Z15UA71` marked
+  `duplicate_of_account: 001EGU7BMJ942ZTRE6`, `status: Inactive`
+- 3 of the 4 "Needs Review" orphan flags — Bellhaven Care Center of Alliance,
+  Bellhaven of Coldwater, and Bellhaven of Sandusky — none of which had any
+  corresponding listing on the current site, left for manual follow-up on
+  whether they've closed, been sold, or rebranded, rather than assumed
+  inactive by the pipeline
+
+**Rejected:**
+- The "Needs Review" proposal on `001QU150PM4Z15UA71` (Bellhaven of Owosso).
+  This account was flagged twice by the pipeline — once correctly as a
+  duplicate of `001EGU7BMJ942ZTRE6`, and separately (and incorrectly, in this
+  context) as an orphan with no site match, since the matcher's orphan pass
+  doesn't know about the duplicate pass's resolution. Approving both would
+  have been contradictory: the `mark_duplicate` proposal already resolves
+  this account's status to Inactive with a clear reason. The redundant
+  "Needs Review" proposal was rejected in favor of the more specific
+  duplicate finding.
+
+This overlap is a known limitation of the current matching logic — the
+orphan-detection pass and the duplicate-detection pass run independently and
+don't cross-reference each other's conclusions. A future improvement would be
+to run duplicate detection first and exclude any account it resolves from
+the orphan pass entirely, rather than relying on the reviewer to catch the
+conflict manually during approval.
 
 ## Running it
 
